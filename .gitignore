@@ -1,0 +1,29 @@
+# Data & database (never commit; large and/or regenerable)
+spend.duckdb
+*.duckdb
+*.duckdb.wal
+data/
+chart_test.html
+
+# Secrets (API keys must never be committed)
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
