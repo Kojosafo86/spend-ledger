@@ -9,6 +9,12 @@ produced every answer.**
 Built with Python, DuckDB, Streamlit, and the Anthropic API. The dataset is
 published departmental spend over £25,000 (Open Government Licence).
 
+![Monthly spend by department over time](assets/spend_by_department.png)
+
+*Two departments plotted over time. DESNZ data ends Sep 2025 while DfT runs to
+Jan 2026 — exactly why cross-department comparison is restricted to the
+overlapping window rather than the raw totals.*
+
 ---
 
 ## Why this project
