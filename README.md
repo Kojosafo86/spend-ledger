@@ -11,9 +11,9 @@ published departmental spend over £25,000 (Open Government Licence).
 
 ![Monthly spend by department over time](assets/spend_by_department.png)
 
-*Two departments plotted over time. DESNZ data ends Sep 2025 while DfT runs to
-Jan 2026 — exactly why cross-department comparison is restricted to the
-overlapping window rather than the raw totals.*
+*Three departments plotted over time, each with a different coverage window —
+exactly why cross-department comparison is restricted to the overlapping period
+rather than the raw totals.*
 
 ---
 
@@ -35,22 +35,28 @@ guardrails around an LLM, and being honest about a dataset's limits.
 
 | | |
 |---|---|
-| Departments | DfT (Transport), DESNZ (Energy) |
-| Transactions | 40,131 payments over £25k |
-| Total value | £64.0bn (gross transactional) |
-| Coverage | Jul 2024 – Jan 2026 |
+| Departments | DfT (Transport), DESNZ (Energy), DWP (Work & Pensions) |
+| Transactions | 157,701 payments over £25k |
+| Total value | £66.9bn (gross transactional) |
+| Coverage | Jul 2024 – Mar 2026 |
 
 Per department:
 
 - **DfT** — 33,272 rows · £48.2bn · Jan 2025 – Jan 2026
 - **DESNZ** — 6,859 rows · £15.8bn · Jul 2024 – Sep 2025
+- **DWP** — 117,570 rows · £2.9bn · Apr 2025 – Mar 2026
+
+DWP's profile is instructive: by far the most transactions but a moderate
+total — operational welfare spend is a high volume of mid-sized contractor and
+assessment payments, unlike DfT's handful of multi-billion infrastructure
+transactions.
 
 > **A note on the figures.** These are *gross transactional* totals — every
 > payment over £25k, including transfers between public bodies and to
 > arm's-length organisations — not net departmental budgets. They are larger
 > than budgets and should be read as transaction flow. The two departments'
 > coverage windows differ, so any cross-department comparison is restricted to
-> the overlapping period (Jan – Sep 2025).
+> the overlapping period (Apr – Sep 2025, where all three overlap).
 
 ---
 
@@ -123,15 +129,13 @@ sidebar.
 Asked *"compare total spend by department for the period where both departments
 have data,"* the model was **not** given the coverage dates. It wrote a query
 that computed each department's date bounds and intersected them
-(`MAX(min_date)` … `MIN(max_date)`) to derive the common window itself, then
-compared on a like-for-like basis:
+(`MAX(min_date)` … `MIN(max_date)`) to derive the common window itself — across
+all three departments — rather than naively summing mismatched ranges. That it
+reasons about the *shape* of the data, not just the keywords, is the point.
 
-- Over the overlapping Jan – Sep 2025 window: **DfT £30.0bn vs DESNZ £9.2bn**
-  (~3:1).
-
-The top supplier across both departments is Network Rail (£10.3bn) — a
-reminder that much of this spend is flow between public bodies, not payments to
-private vendors.
+The top supplier across the dataset is Network Rail (£10.3bn) — a reminder that
+much of this spend is flow between public bodies, not payments to private
+vendors.
 
 ---
 
@@ -177,12 +181,19 @@ split silently collapsed. Detecting *any* non-numeric, non-datetime column fixed
 it. A good reminder that "the data is fine" and "the chart is fine" are separate
 claims worth verifying separately.
 
+**Real-world data quirks.** Adding DWP surfaced two more: its publications are
+listed only via the GOV.UK Search API (filtered by document type), not as
+attachments on one page; and a few months export the date column as Excel
+serial numbers (e.g. `45877`) rather than `DD/MM/YYYY`. Both were diagnosed by
+inspecting the raw data directly, then handled in the loader.
+
 ---
 
 ## Limitations & next steps
 
-- **Two departments.** The pipeline is built to scale to more; adding a
-  department is a folder of CSVs plus any new header synonyms.
+- **Three departments.** The pipeline scales further; adding a department is a
+  folder of CSVs plus any new header synonyms. DWP needed both: new column
+  synonyms and handling for Excel serial-number dates in some months.
 - **Differing coverage windows.** Cross-department comparison is only valid over
   the overlap; the UI flags this rather than hiding it.
 - **Gross transactional figures**, not net budgets — stated throughout.

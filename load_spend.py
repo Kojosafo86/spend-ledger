@@ -50,14 +50,17 @@ SYNONYMS: dict[str, set[str]] = {
     "date": {
         "date", "transactiondate", "paymentdate", "postingdate",
         "invoicedate", "clearingdate", "documentdate", "dateofpayment",
+        "invoicepaiddate",
     },
     "expense_type": {
         "expensetype", "expendituretype", "subjective", "subjectivecode",
         "subjectiveheading", "categoryl2", "expensecategory",
+        "invoiceaccountdescription",
     },
     "expense_area": {
         "expensearea", "costcentre", "costcenter", "directorate",
         "businessunit", "responsibilitygroup", "team",
+        "invoicecostcentredescription",
     },
     "supplier": {
         "supplier", "suppliername", "vendor", "vendorname", "payee",
@@ -66,11 +69,12 @@ SYNONYMS: dict[str, set[str]] = {
     "transaction_number": {
         "transactionnumber", "transactionno", "transno", "documentno",
         "documentnumber", "paymentref", "paymentreference",
-        "invoicenumber", "invoiceno",
+        "invoicenumber", "invoiceno", "paymentnumber",
     },
     "amount": {
         "amount", "amountf", "amountgbp", "amount£", "apamount",
         "value", "netamount", "grossamount", "spend", "totalamount",
+        "transparencyinvoiceamount",
     },
     "description": {
         "narrative", "description", "details", "expensedescription",
@@ -137,6 +141,24 @@ def _read_csv(path: Path) -> pd.DataFrame | None:
     return None
 
 
+def _parse_dates(series: pd.Series) -> pd.Series:
+    """Parse dates that may be text (DD/MM/YYYY etc.) OR Excel serial numbers.
+
+    Some departments (e.g. certain DWP months) export the date column as
+    Excel's internal serial day-count (e.g. '45877') instead of a date string.
+    Text values are parsed normally; bare integers are converted from the
+    Excel epoch (1899-12-30)."""
+    s = series.astype(str).str.strip()
+    out = pd.to_datetime(s, errors="coerce", dayfirst=True)
+
+    # Rescue rows that failed but look like a plain Excel serial number.
+    failed = out.isna() & s.str.fullmatch(r"\d{4,6}")
+    if failed.any():
+        serials = pd.to_numeric(s[failed], errors="coerce")
+        out.loc[failed] = pd.to_datetime(serials, unit="D", origin="1899-12-30")
+    return out
+
+
 def _clean_amount(series: pd.Series) -> pd.Series:
     """'£1,234.50', '(500)', ' 25000 ' -> float. Parens = negative."""
     s = series.astype(str).str.strip()
@@ -190,7 +212,7 @@ def _canonicalise(df: pd.DataFrame, department: str, source_file: str) -> pd.Dat
     df = df[list(SYNONYMS.keys())].copy()
 
     df["amount"] = _clean_amount(df["amount"])
-    df["date"] = pd.to_datetime(df["date"], errors="coerce", dayfirst=True)
+    df["date"] = _parse_dates(df["date"])
     df["supplier"] = df["supplier"].astype(str).str.strip().str.upper()
 
     df.insert(0, "department", department)
