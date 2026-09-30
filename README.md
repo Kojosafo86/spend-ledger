@@ -25,6 +25,20 @@ writing SQL. This tool collapses that to a sentence, while keeping the result
 auditable: the generated SQL is shown alongside every answer, so nothing is a
 black box.
 
+It is also spend analytics in the procurement sense: the same questions a
+category or procurement team asks of its own ledger — who are the biggest
+suppliers, how concentrated is spend, how does it move month to month — asked
+of public data at £66.9bn scale. That is the work I did on SAP and Ariba spend
+data at Eisai Europe; this project applies it to a public dataset anyone can
+check.
+
+Questions you can ask it, for example:
+
+- *Who were the top 10 suppliers by total spend in each department?*
+- *Which suppliers were paid by more than one department?*
+- *How did monthly spend move over the period where all three departments overlap?*
+- *What share of DfT spend went to its five largest payees?*
+
 It's also a deliberate exercise in the parts of data engineering that don't
 show up in a tidy demo: reconciling messy real-world schemas, putting
 guardrails around an LLM, and being honest about a dataset's limits.
@@ -54,7 +68,7 @@ transactions.
 > **A note on the figures.** These are *gross transactional* totals — every
 > payment over £25k, including transfers between public bodies and to
 > arm's-length organisations — not net departmental budgets. They are larger
-> than budgets and should be read as transaction flow. The two departments'
+> than budgets and should be read as transaction flow. The departments'
 > coverage windows differ, so any cross-department comparison is restricted to
 > the overlapping period (Apr – Sep 2025, where all three overlap).
 
