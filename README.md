@@ -78,7 +78,7 @@ transactions.
 
 ```mermaid
 flowchart LR
-    A[Departmental CSVs] --> B[load_spend.py<br/>reconcile + clean]
+    A[Departmental CSVs] --> B[load_spend.py<br/>reconcile + clean<br/>+ supplier names]
     B --> C[(DuckDB<br/>spend table)]
     C --> D[text_to_sql.py<br/>schema-aware prompt]
     D --> E[Claude<br/>generates SQL]
@@ -90,6 +90,7 @@ flowchart LR
 Three modules, cleanly separated:
 
 - **`load_spend.py`** — ingestion and schema reconciliation into DuckDB.
+- **`supplier_names.py`** — supplier-name normalisation, called by the loader.
 - **`text_to_sql.py`** — the natural-language-to-SQL engine (importable; also a
   standalone CLI).
 - **`app.py`** — the Streamlit front end, which *imports* the engine rather than
@@ -118,7 +119,33 @@ canonical schema:
   date formats, and reads the department from the folder rather than an
   unreliable column.
 
-### 2. Text-to-SQL with guardrails
+### 2. Supplier-name normalisation (entity resolution)
+
+The same payee is spelt many ways across departments and months —
+`CAPITA BUSINESS SERVICES LTD`, `Capita Business Services Limited`, a typo'd
+`CAPITA BUSINESS SERVCES LTD`. Grouping on raw names splits that spend,
+understating supplier concentration and hiding suppliers paid by more than one
+department. `supplier_names.py` resolves variants onto one `supplier_clean`
+name in three passes:
+
+- **Rules** — a deterministic key: case, punctuation, `&` → `AND`, `(UK)`
+  asides, and legal-form suffixes (`LTD`, `LIMITED`, `PLC`, `LLP` …) removed.
+- **Fuzzy** — within names sharing a first word, near-identical keys are
+  merged to catch typos. Guards make a false merge much harder than a missed
+  one: different numbers never merge (`HS2 PHASE 1` ≠ `PHASE 2`), a differing
+  word must itself be a long near-match (`SOUTH WEST TRAINS` ≠ `SOUTH EAST
+  TRAINS`), and names are only compared to an existing cluster head, so
+  merges can't chain.
+- **Manual** — `supplier_overrides.csv` for merges no algorithm should guess,
+  such as rolling a subsidiary up to its parent. Words like `GROUP` or
+  `SERVICES` are deliberately kept, because `CAPITA PLC` and `CAPITA BUSINESS
+  SERVICES LTD` are different legal entities.
+
+Every decision lands in a `supplier_map` table (raw name, clean name, method,
+similarity score), so any merge can be inspected and challenged — the same
+supplier-master hygiene a procurement team does on its vendor file.
+
+### 3. Text-to-SQL with guardrails
 
 - **Live schema introspection** — the prompt is built from the *actual* DuckDB
   schema at startup, plus low-cardinality value hints (so the model filters on
@@ -128,8 +155,11 @@ canonical schema:
 - **Validation gate** — single statement, must begin with `SELECT`/`WITH`.
 - **Self-correction** — if a query errors, the error is fed back to the model
   once to fix itself, which absorbs the occasional dialect slip.
+- **Clean names by default** — the prompt tells the model to group and rank by
+  `supplier_clean`, keeping the raw `supplier` column for "how was it written"
+  questions.
 
-### 3. Transparent UI
+### 4. Transparent UI
 
 Every answer shows the generated SQL as an audit trail, then the results table,
 then an auto-selected chart (time series → multi-line by department, rankings →
@@ -155,7 +185,8 @@ vendors.
 
 ## Tech stack
 
-- **Python** — pandas for reconciliation and cleaning
+- **Python** — pandas for reconciliation and cleaning; rapidfuzz for supplier
+  matching
 - **DuckDB** — fast embedded analytical database; read-only at query time
 - **Anthropic API** (Claude) — natural-language-to-SQL generation
 - **Streamlit + Altair** — UI and charting
@@ -166,7 +197,7 @@ vendors.
 
 ```bash
 # 1. Environment
-pip install duckdb pandas anthropic streamlit altair
+pip install duckdb pandas anthropic streamlit altair rapidfuzz
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # 2. Place departmental CSVs under data/raw/<dept>/  e.g. data/raw/dft/
@@ -211,6 +242,8 @@ inspecting the raw data directly, then handled in the loader.
 - **Differing coverage windows.** Cross-department comparison is only valid over
   the overlap; the UI flags this rather than hiding it.
 - **Gross transactional figures**, not net budgets — stated throughout.
-- **Next:** supplier-name normalisation (entity resolution across spelling
-  variants), and a results-caching layer to avoid re-querying identical
-  questions.
+- **Supplier normalisation is conservative by design.** It merges spelling
+  variants and typos, not corporate groups; parent roll-ups go in
+  `supplier_overrides.csv`.
+- **Next:** a results-caching layer to avoid re-querying identical questions,
+  and a hosted demo.

@@ -11,8 +11,11 @@ different column names, encodings, and date formats. This script absorbs
 that mess and emits a single canonical schema:
 
     department, entity, date, expense_type, expense_area,
-    supplier, transaction_number, amount, description,
+    supplier, supplier_clean, transaction_number, amount, description,
     supplier_postcode, source_file
+
+plus a `supplier_map` table recording how each raw supplier name was
+normalised (see supplier_names.py).
 
 Usage
 -----
@@ -23,7 +26,7 @@ Expected layout (department is read from the sub-folder name):
     data/raw/dwp/*.csv
     data/raw/desnz/*.csv
 
-Dependencies: pandas, duckdb   (both already in your `datasci` env)
+Dependencies: pandas, duckdb, rapidfuzz   (pip install rapidfuzz if missing)
 """
 
 from __future__ import annotations
@@ -35,6 +38,8 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
+
+from supplier_names import build_supplier_map, summarise
 
 # --------------------------------------------------------------------------
 # Canonical schema + header synonyms
@@ -253,14 +258,28 @@ def main() -> None:
     ap.add_argument("--raw", default="./data/raw", type=Path)
     ap.add_argument("--db", default="./spend.duckdb", type=Path)
     ap.add_argument("--table", default="spend")
+    ap.add_argument("--overrides", default="./supplier_overrides.csv", type=Path,
+                    help="optional manual supplier merges (match,canonical)")
     args = ap.parse_args()
 
     print(f"Scanning {args.raw} ...")
     df = load(args.raw)
 
+    # Supplier-name normalisation: one clean name per real-world payee.
+    print("Normalising supplier names ...")
+    supplier_map = build_supplier_map(df, args.overrides)
+    df = df.merge(supplier_map[["supplier", "supplier_clean"]],
+                  on="supplier", how="left")
+    order = CANONICAL_ORDER.copy()
+    order.insert(order.index("supplier") + 1, "supplier_clean")
+    df = df[order]
+
     con = duckdb.connect(str(args.db))
     con.execute(f"DROP TABLE IF EXISTS {args.table}")
     con.execute(f"CREATE TABLE {args.table} AS SELECT * FROM df")
+    # Audit trail for every merge: raw name -> clean name, method, score.
+    con.execute("DROP TABLE IF EXISTS supplier_map")
+    con.execute("CREATE TABLE supplier_map AS SELECT * FROM supplier_map")
     con.close()
 
     # Summary
@@ -272,6 +291,7 @@ def main() -> None:
         print(f"  date range   : {df['date'].min():%Y-%m-%d} -> {df['date'].max():%Y-%m-%d}")
     print(f"  total spend  : £{df['amount'].sum():,.0f}")
     print(f"  null dates   : {df['date'].isna().sum():,}")
+    print(summarise(supplier_map))
     print("\n  per department:")
     by_dept = df.groupby("department").agg(
         rows=("amount", "size"), spend=("amount", "sum")

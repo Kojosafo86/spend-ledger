@@ -137,7 +137,12 @@ def infer_chart(df: pd.DataFrame):
     if not num:
         return None
     dt = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
-    cat = [c for c in df.columns if df[c].dtype == object]
+    # Any non-numeric, non-datetime column is a category. DuckDB returns
+    # Arrow-backed strings whose dtype is not the legacy `object`, so an
+    # `== object` check silently misses them and collapses the series split.
+    cat = [c for c in df.columns
+           if not pd.api.types.is_numeric_dtype(df[c])
+           and not pd.api.types.is_datetime64_any_dtype(df[c])]
     # Prefer a spend/amount/total column as the value to plot, else first numeric.
     y = next((c for c in num
               if any(k in c.lower() for k in ("spend", "amount", "total", "value"))),
@@ -276,7 +281,7 @@ for turn in st.session_state.history:
 EXAMPLES = [
     "Top 10 suppliers by total spend",
     "Monthly spend trend by department in 2025",
-    "Which suppliers were paid by both departments, and how much each?",
+    "Which suppliers were paid by more than one department?",
     "Biggest single payments over £50 million",
 ]
 pending = None

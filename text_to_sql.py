@@ -85,8 +85,12 @@ Important facts about the data:
 (including intra-government transfers), not net budgets.
 - `amount` is in GBP. `date` is a TIMESTAMP. `department` holds short \
 lowercase codes (see hints above).
-- `supplier` is stored UPPER-CASE. Match supplier/category text with ILIKE \
-and wildcards, e.g. supplier ILIKE '%capita%'.
+- `supplier_clean` is the normalised supplier name: spelling variants of the \
+same payee ('... LTD' / '... LIMITED', '&' / 'AND', typos) are merged into one. \
+ALWAYS group, rank and count suppliers by `supplier_clean`. Use the raw \
+`supplier` column only when asked how a name was originally written.
+- Supplier names are stored UPPER-CASE. Match supplier/category text with \
+ILIKE and wildcards, e.g. supplier_clean ILIKE '%capita%'.
 - Some `entity` / `expense_*` values may be NULL.
 
 DuckDB dialect notes:
@@ -102,7 +106,10 @@ explanation.
 
 Worked examples:
 Q: Who are the top 10 suppliers by total spend?
-A: SELECT supplier, SUM(amount) AS total_spend FROM spend GROUP BY supplier ORDER BY total_spend DESC LIMIT 10
+A: SELECT supplier_clean AS supplier, SUM(amount) AS total_spend FROM spend GROUP BY supplier_clean ORDER BY total_spend DESC LIMIT 10
+
+Q: Which suppliers were paid by more than one department?
+A: SELECT supplier_clean AS supplier, COUNT(DISTINCT department) AS departments, SUM(amount) AS total_spend FROM spend GROUP BY supplier_clean HAVING COUNT(DISTINCT department) > 1 ORDER BY total_spend DESC LIMIT 25
 
 Q: What was monthly spend for DfT during 2025?
 A: SELECT date_trunc('month', date) AS month, SUM(amount) AS spend FROM spend WHERE department = 'dft' AND year(date) = 2025 GROUP BY month ORDER BY month
