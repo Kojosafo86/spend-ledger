@@ -58,7 +58,10 @@ def match_key(name: str) -> str:
     """Deterministic matching key for a raw supplier name."""
     s = str(name).upper().strip()
     s = s.replace("&", " AND ")
-    s = re.sub(r"\(.*?\)", " ", s)              # '(UK)', '(T/A ...)' asides
+    # Bracketed text is KEPT: it often distinguishes real entities, e.g.
+    # 'HS2 (N1)' vs 'HS2 (N2)' contract lots, or 'ROAD MANAGEMENT SERVICES
+    # (GLOUCESTER)' vs '(PETERBOROUGH)'. Filler such as '(UK)' disappears
+    # anyway because its tokens are in LEGAL_SUFFIXES.
     s = re.sub(r"[^A-Z0-9 ]", " ", s)            # punctuation -> space
     tokens = [t for t in s.split() if t not in LEGAL_SUFFIXES]
     return " ".join(tokens)
@@ -142,9 +145,12 @@ def build_supplier_map(df: pd.DataFrame,
     raw["score"] = raw["match_key"].map(lambda k: key_to_canon[k][1])
 
     # Display name for each cluster: its most-used raw spelling, tidied.
+    # Only spellings that match the cluster head exactly (not via fuzzy
+    # typo-matching) are eligible, so a typo never becomes the display name.
     tidy = raw["supplier"].map(
-        lambda s: re.sub(r"\s+", " ", str(s).upper()).strip(" .,"))
+        lambda s: re.sub(r"\s+", " ", str(s).upper()).strip(" .,-"))
     display = (raw.assign(tidy=tidy)
+                  .loc[raw["score"].isna()]
                   .sort_values(["n", "raw_spend"], ascending=False)
                   .drop_duplicates("canon_key")
                   .set_index("canon_key")["tidy"])
@@ -156,11 +162,25 @@ def build_supplier_map(df: pd.DataFrame,
     raw.loc[raw["score"].notna(), "method"] = "fuzzy"
 
     # --- Pass 3: manual overrides win over everything.
+    # If the override's target is already a cluster, adopt that cluster's
+    # display name, so the merge joins it rather than inventing a new name.
     overrides = load_overrides(overrides_path)
     if overrides:
+        # Two cases:
+        #  - target is in the SAME cluster as the source: the override is
+        #    choosing a spelling (e.g. correct one over a typo) -> use it as-is;
+        #  - target is in ANOTHER cluster: join it, under its display name.
+        key_canon = dict(zip(raw["match_key"], raw["canon_key"]))
+        target = {}
+        for k, c in overrides.items():
+            ck = key_canon.get(match_key(c))
+            if ck is None or ck == key_canon.get(k, k):
+                target[k] = c
+            else:
+                target[k] = display.get(ck, c)
         for col in ("match_key", "canon_key"):
-            hit = raw[col].isin(overrides.keys()) & (raw["method"] != "manual")
-            raw.loc[hit, "supplier_clean"] = raw.loc[hit, col].map(overrides)
+            hit = raw[col].isin(target.keys()) & (raw["method"] != "manual")
+            raw.loc[hit, "supplier_clean"] = raw.loc[hit, col].map(target)
             raw.loc[hit, "method"] = "manual"
 
     raw["score"] = raw["score"].astype("Int64")

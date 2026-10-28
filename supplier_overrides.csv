@@ -1,4 +1,9 @@
 match,canonical
 # Manual supplier merges the algorithm won't make on its own, e.g. rolling a subsidiary up to its parent.
-# One row per raw name (or its normalised form); lines starting with # are ignored. Example:
-# CAPITA PLC,CAPITA BUSINESS SERVICES LTD
+# One row per raw name (or its normalised form); lines starting with # are ignored.
+# Bracketed qualifiers are kept by the matcher (they can mean different entities), so same-entity
+# variants that differ only by a bracketed alias are merged here after a manual check.
+NEXUS (TYNE & WEAR),NEXUS
+HM COURTS & TRIBUNAL SERVICE,HM COURTS AND TRIBUNALS SERVICE (HMCTS)
+SPECIALIST COMPUTER CENTRES (SSC),SPECIALIST COMPUTER CENTRES PLC
+EAST LINDSEY DISTRCIT COUNCIL,EAST LINDSEY DISTRICT COUNCIL

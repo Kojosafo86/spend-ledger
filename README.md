@@ -128,8 +128,12 @@ understating supplier concentration and hiding suppliers paid by more than one
 department. `supplier_names.py` resolves variants onto one `supplier_clean`
 name in three passes:
 
-- **Rules** — a deterministic key: case, punctuation, `&` → `AND`, `(UK)`
-  asides, and legal-form suffixes (`LTD`, `LIMITED`, `PLC`, `LLP` …) removed.
+- **Rules** — a deterministic key: case, punctuation, `&` → `AND`, and
+  legal-form suffixes (`LTD`, `LIMITED`, `PLC`, `LLP`, `UK` …) removed.
+  Bracketed text is deliberately *kept*: a first version stripped it and
+  wrongly merged £2.8bn across two HS2 contract lots (`… HS2 (N1)` / `(N2)`)
+  and three separate road-concession companies. Caught by reviewing the
+  merge table, not by a test.
 - **Fuzzy** — within names sharing a first word, near-identical keys are
   merged to catch typos. Guards make a false merge much harder than a missed
   one: different numbers never merge (`HS2 PHASE 1` ≠ `PHASE 2`), a differing
