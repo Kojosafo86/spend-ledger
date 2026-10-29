@@ -149,6 +149,14 @@ Every decision lands in a `supplier_map` table (raw name, clean name, method,
 similarity score), so any merge can be inspected and challenged — the same
 supplier-master hygiene a procurement team does on its vendor file.
 
+**What it changed on the real data.** Across 3,175 raw supplier names, the
+number of suppliers paid by more than one department rose from **198 to
+267** once names were cleaned. That's 69 cross-department relationships, a
+third more than the raw data shows, previously hidden by `LTD` vs
+`LIMITED`, `&` vs `AND` and typos. Fuzzy matching made only a handful of merges
+(e.g. `NETWORK RAIL INFRASTRUCURE LIMITED`, `COSTAIN INTERGRATED …`), each
+reviewed by hand; most merges were deterministic rules.
+
 ### 3. Text-to-SQL with guardrails
 
 - **Live schema introspection** — the prompt is built from the *actual* DuckDB
