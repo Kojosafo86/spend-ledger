@@ -145,10 +145,31 @@ st.markdown(
         justify-content: flex-start; text-align: left; width: 100%; }}
     .stButton > button p {{ font-size: 1rem; text-align: left; }}
 
+    /* Index of asked questions, like a ledger's contents page */
+    .index-head {{ font-size: .95rem; font-weight: 600; color: var(--ink);
+                   margin: 2.4rem 0 .4rem; }}
+    ol.index, .stMarkdown ol.index {{ list-style: none; padding: 0 !important;
+                                      margin: 0 !important; counter-reset: q; }}
+    .stMarkdown ol.index li {{ margin: 0; padding-left: 0; }}
+    ol.index li {{ counter-increment: q; display: grid;
+                   grid-template-columns: 2rem 1fr; padding: .45rem 0;
+                   border-bottom: 1px solid var(--rule); font-size: 1rem; }}
+    ol.index li::before {{ content: counter(q); color: var(--muted);
+                           font-size: .88rem; padding-top: .1rem; }}
+    ol.index a, .totop a {{ color: var(--blue); text-decoration: none; }}
+    ol.index a:hover, .totop a:hover {{ color: var(--red); text-decoration: underline; }}
+    .totop {{ font-size: .88rem; margin: .6rem 0 0; text-align: right; }}
+    .st-key-reset .stButton > button, .st-key-reset2 .stButton > button {{
+        width: auto; border: 1px solid var(--ink); border-radius: 4px;
+        color: var(--ink); padding: .35rem .9rem; margin-top: .9rem;
+    }}
+    .st-key-reset .stButton > button:hover, .st-key-reset2 .stButton > button:hover {{
+        border-color: var(--red); color: var(--red); }}
+
     /* An answered question */
     .q {{ font-size: 1.32rem; font-weight: 600; line-height: 1.3;
           letter-spacing: -0.01em; color: var(--ink);
-          margin: 3rem 0 1rem; padding-top: 1.6rem;
+          margin: 3rem 0 1rem; padding-top: 1.6rem; scroll-margin-top: 1rem;
           border-top: 2px solid var(--ink); }}
     .rowcount {{ font-size: .85rem; color: var(--muted); margin: .45rem 0 0; }}
     .sql-head {{ font-size: .88rem; color: var(--muted); margin: 1.4rem 0 .3rem; }}
@@ -402,10 +423,10 @@ def as_sheet(df: pd.DataFrame) -> pd.DataFrame:
 _CODE_WRAPS = "wrap_lines" in inspect.signature(st.code).parameters
 
 
-def render_answer(question: str, sql: str, df: pd.DataFrame) -> None:
+def render_answer(question: str, sql: str, df: pd.DataFrame, idx: int = 0) -> None:
     df = for_display(df)
     sheet = as_sheet(df) if not df.empty else df
-    st.markdown(f'<div class="q">{html.escape(question)}</div>',
+    st.markdown(f'<div class="q" id="a{idx}">{html.escape(question)}</div>',
                 unsafe_allow_html=True)
     if df.empty:
         st.markdown('<p class="rowcount">No payments matched. Try a wider date '
@@ -430,6 +451,8 @@ def render_answer(question: str, sql: str, df: pd.DataFrame) -> None:
         st.code(sql, language="sql", wrap_lines=True)
     else:
         st.code(sql, language="sql")
+    st.markdown('<p class="totop"><a href="#top">Back to the top</a></p>',
+                unsafe_allow_html=True)
 
 
 def coverage_html(stats: dict) -> str:
@@ -486,7 +509,7 @@ stats = headline_stats()
 
 st.markdown(
     f"""
-    <div class="mast">
+    <div class="mast" id="top">
       <h1>Spend Ledger</h1>
       <p>Ask a question about UK government spending in plain English. Every
       answer comes with the SQL that produced it, so you can check the working.
@@ -501,6 +524,8 @@ st.markdown(coverage_html(stats), unsafe_allow_html=True)
 
 if "history" not in st.session_state:
     st.session_state.history = []   # list of {question, sql, df}
+if "scroll_to" not in st.session_state:
+    st.session_state.scroll_to = None
 
 EXAMPLES = [
     "Top 10 suppliers by total spend",
@@ -508,16 +533,65 @@ EXAMPLES = [
     "Monthly spend by department in 2025",
     "Biggest single payments over £50 million",
 ]
+history = st.session_state.history
 pending = None
-if not st.session_state.history:
-    st.markdown('<div class="examples-head">Try one of these, or ask your own below</div>',
-                unsafe_allow_html=True)
-    for i, ex in enumerate(EXAMPLES):
-        if st.button(ex, key=f"ex{i}", use_container_width=True):
-            pending = ex
 
-for turn in st.session_state.history:
-    render_answer(turn["question"], turn["sql"], turn["df"])
+
+def start_again() -> None:
+    st.session_state.history = []
+    st.session_state.scroll_to = None
+
+
+def example_buttons(heading: str, prefix: str) -> str | None:
+    asked = {t["question"] for t in history}
+    left = [e for e in EXAMPLES if e not in asked]
+    if not left:
+        return None
+    st.markdown(f'<div class="examples-head">{heading}</div>', unsafe_allow_html=True)
+    chosen = None
+    for i, ex in enumerate(left):
+        if st.button(ex, key=f"{prefix}{i}", use_container_width=True):
+            chosen = ex
+    return chosen
+
+
+if not history:
+    pending = example_buttons("Try one of these, or ask your own below", "ex")
+else:
+    # Contents: jump to any answer, or clear the page.
+    items = "".join(f'<li><a href="#a{i}">{html.escape(t["question"])}</a></li>'
+                    for i, t in enumerate(history))
+    st.markdown(f'<div class="index-head">Your questions</div>'
+                f'<ol class="index">{items}</ol>', unsafe_allow_html=True)
+    with st.container(key="reset"):
+        st.button("Clear answers and start again", on_click=start_again,
+                  key="reset_btn")
+
+for i, turn in enumerate(history):
+    render_answer(turn["question"], turn["sql"], turn["df"], i)
+
+if history:
+    pending = example_buttons("Ask another", "more") or pending
+    with st.container(key="reset2"):
+        st.button("Clear answers and start again", on_click=start_again,
+                  key="reset_btn2")
+
+# After a new answer, bring it into view (the page otherwise stays put).
+if st.session_state.scroll_to is not None:
+    import streamlit.components.v1 as components
+    components.html(
+        f"""<script>
+        // Streamlit pins the page to the bottom after a rerun when a chat
+        // input is present, so scroll after it has settled.
+        const go = () => {{
+          const el = window.parent.document.getElementById("a{st.session_state.scroll_to}");
+          if (el) el.scrollIntoView({{behavior: "auto", block: "start"}});
+        }};
+        setTimeout(go, 350); setTimeout(go, 900);
+        </script>""",
+        height=0,
+    )
+    st.session_state.scroll_to = None
 
 prompt = st.chat_input("Ask about suppliers, departments or time periods")
 prompt = prompt or pending
@@ -535,5 +609,6 @@ if prompt:
                 f"Details: `{err}`"
             )
             st.stop()
-    st.session_state.history.append({"question": prompt, "sql": sql, "df": df})
+    history.append({"question": prompt, "sql": sql, "df": df})
+    st.session_state.scroll_to = len(history) - 1
     st.rerun()
