@@ -70,6 +70,7 @@ SYNONYMS: dict[str, set[str]] = {
     "supplier": {
         "supplier", "suppliername", "vendor", "vendorname", "payee",
         "beneficiary", "merchant", "merchantname",
+        "sopsuppliername",            # DWP 2024 files
     },
     "transaction_number": {
         "transactionnumber", "transactionno", "transno", "documentno",
@@ -165,10 +166,19 @@ def _parse_dates(series: pd.Series) -> pd.Series:
 
 
 def _clean_amount(series: pd.Series) -> pd.Series:
-    """'£1,234.50', '(500)', ' 25000 ' -> float. Parens = negative."""
+    """'£1,234.50', '(500)', ' 25000 ', '?10,613,575' -> float. Parens = negative.
+
+    A leading '£', 'GBP', or '?' (DWP 2024 files ship '£' mangled to '?')
+    is removed; thousands separators and whitespace are ignored."""
     s = series.astype(str).str.strip()
+    # Only a currency sign ('£', or '?' from a mangled export) or 'GBP' may
+    # precede the number; anything else with letters stays non-numeric, so
+    # postcodes and free text can't masquerade as money.
+    s = s.str.replace(r"^\(\s*(?:£|\?|GBP)\s*", "(", regex=True)
+    s = s.str.replace(r"^-\s*(?:£|\?|GBP)\s*", "-", regex=True)
+    s = s.str.replace(r"^(?:£|\?|GBP)\s*", "", regex=True)
     neg = s.str.startswith("(") & s.str.endswith(")")
-    s = s.str.replace(r"[£,()\s]", "", regex=True)
+    s = s.str.replace(r"[,()\s]", "", regex=True)
     out = pd.to_numeric(s, errors="coerce")
     out.loc[neg] = -out.loc[neg].abs()
     return out
@@ -218,7 +228,8 @@ def _canonicalise(df: pd.DataFrame, department: str, source_file: str) -> pd.Dat
 
     df["amount"] = _clean_amount(df["amount"])
     df["date"] = _parse_dates(df["date"])
-    df["supplier"] = df["supplier"].astype(str).str.strip().str.upper()
+    sup = df["supplier"].astype("string").str.strip().str.upper()
+    df["supplier"] = sup.mask(sup.isin(["", "NAN", "<NA>", "NONE"]))
 
     df.insert(0, "department", department)
     df["source_file"] = source_file
@@ -241,7 +252,18 @@ def load(raw_dir: Path) -> pd.DataFrame:
         raw = _read_csv(path)
         if raw is None or raw.empty:
             continue
-        frames.append(_canonicalise(raw, department, path.name))
+        frame = _canonicalise(raw, department, path.name)
+        kept = frame.dropna(subset=["amount", "supplier"])
+        if kept.empty:
+            missing = [c for c in ("supplier", "amount", "date")
+                       if frame[c].isna().all()]
+            print(f"    ! WARNING: 0 of {len(frame):,} rows kept from {path.name}"
+                  f" (no usable {', '.join(missing) or 'supplier/amount'} values)."
+                  f" Headers: {list(raw.columns)}", file=sys.stderr)
+        elif len(kept) < 0.9 * len(frame):
+            print(f"    ! WARNING: only {len(kept):,} of {len(frame):,} rows kept"
+                  f" from {path.name}", file=sys.stderr)
+        frames.append(kept)
 
     if not frames:
         sys.exit("Nothing loaded — every file failed to parse.")
@@ -249,7 +271,6 @@ def load(raw_dir: Path) -> pd.DataFrame:
     df = pd.concat(frames, ignore_index=True)
     # Drop rows with no amount or no supplier — usually footers/blanks.
     df = df.dropna(subset=["amount", "supplier"])
-    df = df[df["supplier"] != "NAN"]
     return df
 
 
