@@ -52,6 +52,13 @@ st.markdown(
     html, body, [class*="st-"], .stMarkdown, p, span, label, div {
         font-family: 'IBM Plex Sans', system-ui, sans-serif;
     }
+    /* The rule above also hits Streamlit's icon spans, so icons such as the
+       chat avatars render as their ligature names ("face", "smart_toy").
+       Hand the icon font back. */
+    [data-testid="stIconMaterial"],
+    [data-testid="stIconMaterial"] * {
+        font-family: 'Material Symbols Rounded' !important;
+    }
     .block-container { padding-top: 2.2rem; max-width: 1100px; }
 
     .led-mast { border-bottom: 2px solid #B08D3F; padding-bottom: .55rem; margin-bottom: 1.1rem; }
