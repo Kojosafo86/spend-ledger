@@ -5,17 +5,23 @@ A Streamlit front end over the DuckDB `spend` table. Ask a plain-English
 question; the text_to_sql layer turns it into validated DuckDB SQL, runs it
 read-only, and the answer is shown alongside the exact query that produced it.
 
+Design: answers are drawn as a sheet of accounting analysis paper — feint
+ruled rows, red money-column rules, a red double margin, and totals
+double-underlined the way a bookkeeper would. Everything around the sheet is
+kept quiet.
+
 Reuses the engine from text_to_sql.py rather than duplicating it.
 
 Run:
     pip install streamlit
     export ANTHROPIC_API_KEY=sk-ant-...
-    mkdir -p .streamlit && mv config.toml .streamlit/      # theme (optional)
     streamlit run app.py
 """
 
 from __future__ import annotations
 
+import html
+import inspect
 import os
 
 import altair as alt
@@ -34,63 +40,153 @@ from text_to_sql import (
 
 DB_PATH = os.environ.get("SPEND_DB", "./spend.duckdb")
 TABLE = "spend"
+SHEET_MAX_ROWS = 100          # larger results fall back to a scrolling grid
+
+DEPT_NAMES = {
+    "dft": "Department for Transport",
+    "desnz": "Department for Energy Security and Net Zero",
+    "dwp": "Department for Work and Pensions",
+}
+
+# Palette — accounting analysis paper.
+PAPER = "#F3F7F2"     # pale green-white page
+SHEET = "#FCFDFB"     # the sheet itself
+RULE = "#CFE0D2"      # feint green row ruling
+INK = "#1B2A3A"       # blue-black ink
+BLUE = "#2D5B8A"      # ink blue: links, first chart series
+RED = "#B23A3A"       # ledger red: margin and money-column rules
+MUTED = "#5B6B63"
+SERIES = [BLUE, RED, "#4F7D5C", "#8A6D2D", "#6B5B8A"]
 
 st.set_page_config(
     page_title="Spend Ledger",
     page_icon="§",
-    layout="wide",
+    layout="centered",
+    initial_sidebar_state="collapsed",
 )
 
 # --------------------------------------------------------------------------
-# Look & feel — institutional ledger, not a chatbot
+# Look & feel
 # --------------------------------------------------------------------------
 st.markdown(
-    """
+    f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
-    html, body, [class*="st-"], .stMarkdown, p, span, label, div {
-        font-family: 'IBM Plex Sans', system-ui, sans-serif;
-    }
-    /* The rule above also hits Streamlit's icon spans, so icons such as the
-       chat avatars render as their ligature names ("face", "smart_toy").
-       Hand the icon font back. */
-    [data-testid="stIconMaterial"],
-    [data-testid="stIconMaterial"] * {
+    :root {{
+        --paper: {PAPER}; --sheet: {SHEET}; --rule: {RULE}; --ink: {INK};
+        --blue: {BLUE}; --red: {RED}; --muted: {MUTED};
+    }}
+
+    /* Text font. Set on containers and inherited, never on bare span/div,
+       so Streamlit's icon font is left alone. */
+    .stApp, .stApp .stMarkdown, .stApp button, .stApp input,
+    .stApp textarea, .stApp label {{
+        font-family: 'Instrument Sans', system-ui, sans-serif;
+        font-feature-settings: "tnum" 1;
+    }}
+    [data-testid="stIconMaterial"], [data-testid="stIconMaterial"] * {{
         font-family: 'Material Symbols Rounded' !important;
-    }
-    .block-container { padding-top: 2.2rem; max-width: 1100px; }
+    }}
+    .stApp {{ background: var(--paper); color: var(--ink); }}
+    [data-testid="stHeader"] {{ background: transparent; }}
+    [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] {{ display: none; }}
+    [data-testid="stBottom"] > div, [data-testid="stBottomBlockContainer"] {{
+        background: var(--paper);
+    }}
+    .block-container {{ padding-top: 3.2rem; padding-bottom: 7rem; max-width: 820px; }}
 
-    .led-mast { border-bottom: 2px solid #B08D3F; padding-bottom: .55rem; margin-bottom: 1.1rem; }
-    .led-mast h1 {
-        font-family: 'IBM Plex Serif', serif; font-weight: 600;
-        color: #14242E; font-size: 2.1rem; letter-spacing: -.01em; margin: 0;
-    }
-    .led-mast .sub { color: #5C6B73; font-size: .95rem; margin-top: .15rem; }
+    /* Masthead */
+    .mast h1 {{
+        font-family: 'Instrument Sans', sans-serif; font-weight: 700;
+        font-size: 2.75rem; line-height: 1.05; letter-spacing: -0.025em;
+        color: var(--ink); margin: 0 0 .6rem; padding: 0;
+    }}
+    .mast p {{ font-size: 1.06rem; line-height: 1.55; color: var(--muted);
+              max-width: 58ch; margin: 0; }}
+    .mast p strong {{ color: var(--ink); font-weight: 600; }}
 
-    .eyebrow {
-        font-family: 'IBM Plex Mono', monospace; font-size: .7rem;
-        letter-spacing: .18em; text-transform: uppercase; color: #B08D3F;
-        margin: .2rem 0 .35rem;
-    }
+    /* Coverage timeline */
+    .cov {{ margin: 2rem 0 .4rem; }}
+    .cov-row {{ display: grid; grid-template-columns: 11.5rem 1fr 8.5rem;
+                align-items: center; column-gap: 1rem; padding: .42rem 0;
+                border-bottom: 1px solid var(--rule); }}
+    .cov-row:first-child {{ border-top: 1px solid var(--rule); }}
+    .cov-name {{ font-size: .9rem; line-height: 1.25; color: var(--ink); }}
+    .cov-track {{ position: relative; height: 12px; }}
+    .cov-band {{ position: absolute; top: -9px; bottom: -9px;
+                 background: rgba(45, 91, 138, .09); }}
+    .cov-bar {{ position: absolute; top: 3px; height: 6px; background: var(--ink);
+                border-radius: 1px; }}
+    .cov-fig {{ font-size: .9rem; color: var(--ink); text-align: right;
+                white-space: nowrap; line-height: 1.25; }}
+    .cov-fig small {{ display: block; font-size: .78rem; color: var(--muted); }}
+    .cov-axis {{ display: grid; grid-template-columns: 11.5rem 1fr 8.5rem;
+                 column-gap: 1rem; font-size: .8rem; color: var(--muted);
+                 padding-top: .35rem; }}
+    .cov-axis .ends {{ display: flex; justify-content: space-between; }}
+    .cov-note {{ font-size: .86rem; line-height: 1.5; color: var(--muted);
+                 margin: .9rem 0 0; max-width: 64ch; }}
+    .cov-note b {{ color: var(--blue); font-weight: 600; }}
 
-    .readout { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid #DED8CB;
-               border-radius: 8px; overflow: hidden; margin-bottom: 1.4rem; }
-    .readout .cell { flex: 1 1 0; min-width: 150px; padding: .85rem 1.1rem;
-                     border-right: 1px solid #DED8CB; background: #FBFAF6; }
-    .readout .cell:last-child { border-right: none; }
-    .readout .num { font-family: 'IBM Plex Mono', monospace; font-weight: 600;
-                    font-size: 1.45rem; color: #14242E; line-height: 1.1; }
-    .readout .lab { font-size: .72rem; letter-spacing: .12em; text-transform: uppercase;
-                    color: #7A8891; margin-top: .25rem; }
+    /* Example questions: plain ruled lines, like entries waiting in a book */
+    .examples-head {{ font-size: .95rem; font-weight: 600; color: var(--ink);
+                      margin: 2.6rem 0 .3rem; }}
+    .stButton > button {{
+        width: 100%; justify-content: flex-start; text-align: left;
+        background: transparent; border: none; border-radius: 0;
+        border-bottom: 1px solid var(--rule); color: var(--blue);
+        padding: .55rem 0; min-height: 0; font-size: 1rem;
+    }}
+    .stButton > button:hover {{ color: var(--red); background: transparent; }}
+    .stButton > button:focus-visible {{ outline: 2px solid var(--blue);
+                                        outline-offset: 2px; }}
+    .stButton > button > div, .stButton > button [data-testid="stMarkdownContainer"] {{
+        justify-content: flex-start; text-align: left; width: 100%; }}
+    .stButton > button p {{ font-size: 1rem; text-align: left; }}
 
-    .prov { font-size: .85rem; color: #3A4A52; line-height: 1.5; }
-    .prov code { background: #ECE8DF; padding: .05rem .3rem; border-radius: 3px;
-                 font-family: 'IBM Plex Mono', monospace; }
-    .caveat { border-left: 3px solid #B08D3F; padding: .5rem .7rem; background: #FBFAF6;
-              font-size: .82rem; color: #4A5A62; margin-top: .8rem; border-radius: 0 6px 6px 0; }
+    /* An answered question */
+    .q {{ font-size: 1.32rem; font-weight: 600; line-height: 1.3;
+          letter-spacing: -0.01em; color: var(--ink);
+          margin: 3rem 0 1rem; padding-top: 1.6rem;
+          border-top: 2px solid var(--ink); }}
+    .rowcount {{ font-size: .85rem; color: var(--muted); margin: .45rem 0 0; }}
+    .sql-head {{ font-size: .88rem; color: var(--muted); margin: 1.4rem 0 .3rem; }}
+    .stCode pre, .stCode code {{ font-family: 'IBM Plex Mono', monospace !important;
+                                 font-size: .82rem !important; }}
+    .stCode pre {{ background: #E8F0E9 !important; }}
 
-    [data-testid="stChatMessage"] { background: transparent; }
+    /* The ledger sheet */
+    .sheet-wrap {{ overflow-x: auto; }}
+    table.sheet {{
+        width: 100%; border-collapse: collapse; background: var(--sheet);
+        border: 1px solid var(--rule);
+        box-shadow: inset 6px 0 0 -3px var(--sheet), inset 7px 0 0 -3px var(--red),
+                    inset 10px 0 0 -3px var(--sheet), inset 11px 0 0 -3px var(--red);
+        font-size: .93rem;
+    }}
+    .sheet th {{ text-align: left; font-weight: 600; color: var(--ink);
+                 padding: .7rem .8rem .5rem; border-bottom: 1.5px solid var(--ink);
+                 font-size: .84rem; }}
+    .sheet th:first-child, .sheet td:first-child {{ padding-left: 1.6rem; }}
+    .sheet td {{ padding: .5rem .8rem; border-bottom: 1px solid var(--rule);
+                 color: var(--ink); vertical-align: top; }}
+    .sheet .num {{ text-align: right; white-space: nowrap;
+                   border-left: 1px solid rgba(178, 58, 58, .35); }}
+    .sheet th.num {{ border-left: 1px solid rgba(178, 58, 58, .35); }}
+    .sheet tfoot td {{ font-weight: 600; border-bottom: none; padding-top: .55rem; }}
+    .sheet tfoot td.num span {{ display: inline-block; padding: .1rem 0 .15rem;
+        border-top: 1px solid var(--ink); border-bottom: 3px double var(--ink); }}
+    .sheet .neg {{ color: var(--red); }}
+
+    @media (max-width: 640px) {{
+        .mast h1 {{ font-size: 2.1rem; }}
+        .cov-row, .cov-axis {{ grid-template-columns: 1fr; row-gap: .3rem; }}
+        .cov-fig {{ text-align: left; }}
+        .cov-track {{ margin: .55rem 0; }}
+        .cov-axis > div:first-child, .cov-axis > div:last-child {{ display: none; }}
+    }}
+    @media (prefers-reduced-motion: reduce) {{ * {{ transition: none !important; }} }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -117,17 +213,14 @@ def get_engine():
 def headline_stats() -> dict:
     con = duckdb.connect(DB_PATH, read_only=True)
     row = con.execute(f"""
-        SELECT COUNT(*)                          AS txns,
-               SUM(amount)                       AS total,
-               COUNT(DISTINCT department)        AS depts,
-               MIN(date)                         AS lo,
-               MAX(date)                         AS hi
+        SELECT COUNT(*), SUM(amount), COUNT(DISTINCT department),
+               MIN(date), MAX(date)
         FROM {TABLE}
     """).fetchone()
     dep = con.execute(f"""
         SELECT department, MIN(date) AS lo, MAX(date) AS hi,
                COUNT(*) AS n, SUM(amount) AS spend
-        FROM {TABLE} GROUP BY department ORDER BY department
+        FROM {TABLE} GROUP BY department ORDER BY spend DESC
     """).fetchdf()
     con.close()
     return {"txns": row[0], "total": row[1], "depts": row[2],
@@ -135,7 +228,92 @@ def headline_stats() -> dict:
 
 
 # --------------------------------------------------------------------------
-# Result rendering: SQL audit trail -> table -> auto chart
+# Formatting helpers
+# --------------------------------------------------------------------------
+def money(v: float) -> str:
+    if abs(v) >= 1e9:
+        return f"£{v / 1e9:,.1f}bn"
+    if abs(v) >= 1e6:
+        return f"£{v / 1e6:,.0f}m"
+    return f"£{v:,.0f}"
+
+
+def humanise(col: str) -> str:
+    s = str(col).replace("_", " ").strip()
+    return s[:1].upper() + s[1:]
+
+
+MONEY_HINTS = ("spend", "amount", "total", "value", "paid", "payment")
+NOT_SUMMABLE = ("avg", "mean", "median", "share", "pct", "percent", "ratio",
+                "rank", "count", "n_", "rows", "departments", "year", "month")
+
+
+def is_money(col: str, s: pd.Series) -> bool:
+    return (pd.api.types.is_float_dtype(s)
+            or any(k in col.lower() for k in MONEY_HINTS)
+            ) and pd.api.types.is_numeric_dtype(s) and not any(
+                k in col.lower() for k in ("count", "departments", "rows"))
+
+
+def summable(col: str) -> bool:
+    c = col.lower()
+    return any(k in c for k in MONEY_HINTS) and not any(k in c for k in NOT_SUMMABLE)
+
+
+def fmt_cell(col: str, s: pd.Series, v) -> tuple[str, bool]:
+    """Return (text, is_negative)."""
+    if v is None or (not isinstance(v, str) and pd.isna(v)):
+        return "", False
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return pd.Timestamp(v).strftime("%b %Y"), False
+    if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
+        if is_money(col, s):
+            return (f"£{v:,.0f}" if v >= 0 else f"(£{abs(v):,.0f})"), v < 0
+        if pd.api.types.is_integer_dtype(s):
+            return f"{int(v):,}", False
+        return f"{v:,.2f}", False
+    return str(v), False
+
+
+def ledger_sheet(df: pd.DataFrame) -> str:
+    """Render a result as a ruled ledger sheet (HTML)."""
+    num_cols = {c for c in df.columns
+                if pd.api.types.is_numeric_dtype(df[c])
+                and not pd.api.types.is_bool_dtype(df[c])}
+    head = "".join(
+        f'<th class="{"num" if c in num_cols else ""}">{html.escape(humanise(c))}</th>'
+        for c in df.columns)
+    body = []
+    for _, r in df.iterrows():
+        cells = []
+        for c in df.columns:
+            text, neg = fmt_cell(c, df[c], r[c])
+            cls = " ".join(x for x in ("num" if c in num_cols else "",
+                                        "neg" if neg else "") if x)
+            cells.append(f'<td class="{cls}">{html.escape(text)}</td>')
+        body.append("<tr>" + "".join(cells) + "</tr>")
+
+    # Totals line, only where adding up makes sense (a ranking of spend).
+    foot = ""
+    sum_cols = [c for c in df.columns if c in num_cols and summable(c)]
+    if len(df) > 1 and sum_cols:
+        cells = []
+        for i, c in enumerate(df.columns):
+            if c in sum_cols:
+                text, _ = fmt_cell(c, df[c], float(df[c].sum()))
+                cells.append(f'<td class="num"><span>{html.escape(text)}</span></td>')
+            elif i == 0:
+                cells.append("<td>Total of rows shown</td>")
+            else:
+                cells.append(f'<td class="{"num" if c in num_cols else ""}"></td>')
+        foot = "<tfoot><tr>" + "".join(cells) + "</tr></tfoot>"
+
+    return (f'<div class="sheet-wrap"><table class="sheet"><thead><tr>{head}'
+            f'</tr></thead><tbody>{"".join(body)}</tbody>{foot}</table></div>')
+
+
+# --------------------------------------------------------------------------
+# Charts
 # --------------------------------------------------------------------------
 def infer_chart(df: pd.DataFrame):
     if df.empty or len(df) < 2:
@@ -150,10 +328,7 @@ def infer_chart(df: pd.DataFrame):
     cat = [c for c in df.columns
            if not pd.api.types.is_numeric_dtype(df[c])
            and not pd.api.types.is_datetime64_any_dtype(df[c])]
-    # Prefer a spend/amount/total column as the value to plot, else first numeric.
-    y = next((c for c in num
-              if any(k in c.lower() for k in ("spend", "amount", "total", "value"))),
-             num[0])
+    y = next((c for c in num if any(k in c.lower() for k in MONEY_HINTS)), num[0])
     if dt:
         return ("line", dt[0], y, cat[0] if cat else None)
     if cat and len(df) <= 30:
@@ -161,76 +336,146 @@ def infer_chart(df: pd.DataFrame):
     return None
 
 
-def style_money(df: pd.DataFrame):
-    fmt = {}
-    for c in df.columns:
-        if pd.api.types.is_datetime64_any_dtype(df[c]):
-            fmt[c] = lambda v: v.strftime("%b %Y") if pd.notna(v) else ""
-        elif pd.api.types.is_float_dtype(df[c]):
-            fmt[c] = "£{:,.0f}"
-        elif pd.api.types.is_integer_dtype(df[c]):
-            fmt[c] = "{:,}"
-    return df.style.format(fmt)
+def _chart_config(chart):
+    return (chart.configure(font="Instrument Sans, Source Sans Pro, Helvetica, sans-serif",
+                            background="transparent")
+            .configure_view(strokeWidth=0)
+            .configure_axis(labelColor=MUTED, titleColor=MUTED, gridColor=RULE,
+                            domainColor=RULE, tickColor=RULE, labelFontSize=11))
 
 
-def render_answer(sql: str, df: pd.DataFrame):
-    st.markdown('<div class="eyebrow">Generated SQL · audit trail</div>',
-                unsafe_allow_html=True)
-    st.code(sql, language="sql")
-
-    if df.empty:
-        st.info("That query ran but returned no rows. Try widening the "
-                "time period, or name a different supplier or department.")
-        return
-
-    st.dataframe(style_money(df), use_container_width=True, hide_index=True)
-
+def render_chart(df: pd.DataFrame) -> None:
     chart = infer_chart(df)
-    try:
-        if chart and chart[0] == "line":
-            _, x, y, color = chart
-            enc = dict(
-                x=alt.X(f"{x}:T", title=None),
-                y=alt.Y(f"{y}:Q", title=None, axis=alt.Axis(format="~s")),
-            )
-            if color:
-                # Visible proof of which code is running + a real legend.
-                st.caption(
-                    f"{df[color].nunique()} series — "
-                    + ", ".join(map(str, sorted(df[color].unique())))
-                )
-                enc["color"] = alt.Color(
-                    f"{color}:N", title=None,
-                    scale=alt.Scale(range=["#B08D3F", "#14242E", "#5C6B73"]),
-                )
-            line = (alt.Chart(df).mark_line(strokeWidth=2.5)
-                    .encode(**enc).properties(height=300))
-            st.altair_chart(line, use_container_width=True)
-        elif chart and chart[0] == "bar":
-            _, x, y, _ = chart
-            bar = (alt.Chart(df).mark_bar(color="#B08D3F", cornerRadius=2)
-                   .encode(x=alt.X(f"{y}:Q", title=None, axis=alt.Axis(format="~s")),
-                           y=alt.Y(f"{x}:N", sort="-x", title=None))
-                   .properties(height=max(220, len(df) * 30)))
-            st.altair_chart(bar, use_container_width=True)
-    except Exception:                          # noqa: BLE001
-        pass   # table already shown; a charting quirk shouldn't break the answer
+    if not chart:
+        return
+    kind, x, y, color = chart
+    yfmt = alt.Axis(labelExpr=(
+        "datum.value >= 1e9 ? '£' + format(datum.value / 1e9, ',.0f') + 'bn' : "
+        "datum.value >= 1e6 ? '£' + format(datum.value / 1e6, ',.0f') + 'm' : "
+        "'£' + format(datum.value, ',.0f')"), tickCount=6)
+    if kind == "line":
+        enc = dict(x=alt.X(f"{x}:T", title=None),
+                   y=alt.Y(f"{y}:Q", title=None, axis=yfmt))
+        if color:
+            enc["color"] = alt.Color(f"{color}:N", title=None,
+                                     scale=alt.Scale(range=SERIES),
+                                     legend=alt.Legend(orient="top"))
+        c = alt.Chart(df).mark_line(strokeWidth=2.2).encode(**enc).properties(height=280)
+    else:
+        c = (alt.Chart(df).mark_bar(color=BLUE, size=14)
+             .encode(x=alt.X(f"{y}:Q", title=None, axis=yfmt),
+                     y=alt.Y(f"{x}:N", sort="-x", title=None,
+                             axis=alt.Axis(labelLimit=200)))
+             .properties(height=max(160, len(df) * 26)))
+    st.altair_chart(_chart_config(c), use_container_width=True)
+
+
+DEPT_SHORT = {"dft": "DfT", "desnz": "DESNZ", "dwp": "DWP"}
+
+
+def for_display(df: pd.DataFrame) -> pd.DataFrame:
+    """Readable labels: department codes -> DfT / DESNZ / DWP."""
+    out = df.copy()
+    for c in out.columns:
+        if c.lower() in ("department", "dept") and not pd.api.types.is_numeric_dtype(out[c]):
+            out[c] = out[c].map(lambda v: DEPT_SHORT.get(v, v))
+    return out
+
+
+def as_sheet(df: pd.DataFrame) -> pd.DataFrame:
+    """A time series split by a category reads better as a ledger page: one
+    row per period, one column per category (e.g. month x department)."""
+    dt = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+    num = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    cat = [c for c in df.columns if c not in dt and c not in num]
+    if len(dt) == 1 and len(cat) == 1 and len(num) == 1 and df[cat[0]].nunique() <= 8:
+        wide = df.pivot_table(index=dt[0], columns=cat[0], values=num[0],
+                              aggfunc="sum").reset_index()
+        wide.columns = [str(c) for c in wide.columns]
+        # keep the money/summable meaning of the value column in each header
+        rename = {c: f"{c} {num[0]}" for c in wide.columns[1:]}
+        wide = wide.rename(columns=rename)
+        return wide
+    return df
+
+
+_CODE_WRAPS = "wrap_lines" in inspect.signature(st.code).parameters
+
+
+def render_answer(question: str, sql: str, df: pd.DataFrame) -> None:
+    df = for_display(df)
+    sheet = as_sheet(df) if not df.empty else df
+    st.markdown(f'<div class="q">{html.escape(question)}</div>',
+                unsafe_allow_html=True)
+    if df.empty:
+        st.markdown('<p class="rowcount">No payments matched. Try a wider date '
+                    'range, or a different supplier or department.</p>',
+                    unsafe_allow_html=True)
+    elif len(sheet) <= SHEET_MAX_ROWS:
+        st.markdown(ledger_sheet(sheet), unsafe_allow_html=True)
+        st.markdown(f'<p class="rowcount">{len(sheet):,} row{"s" if len(sheet) != 1 else ""}'
+                    '</p>', unsafe_allow_html=True)
+    else:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.markdown(f'<p class="rowcount">{len(df):,} rows</p>',
+                    unsafe_allow_html=True)
+    if not df.empty:
+        try:
+            render_chart(df)
+        except Exception:                      # noqa: BLE001
+            pass   # the sheet is already shown; a chart quirk shouldn't break it
+    st.markdown('<p class="sql-head">The SQL that produced this answer</p>',
+                unsafe_allow_html=True)
+    if _CODE_WRAPS:
+        st.code(sql, language="sql", wrap_lines=True)
+    else:
+        st.code(sql, language="sql")
+
+
+def coverage_html(stats: dict) -> str:
+    dep = stats["by_dept"]
+    lo, hi = pd.Timestamp(stats["lo"]), pd.Timestamp(stats["hi"])
+    span = max((hi - lo).total_seconds(), 1)
+
+    def pct(t) -> float:
+        return 100 * (pd.Timestamp(t) - lo).total_seconds() / span
+
+    o_lo, o_hi = pd.Timestamp(dep["lo"].max()), pd.Timestamp(dep["hi"].min())
+    has_overlap = len(dep) > 1 and o_lo < o_hi
+    band = (f'<div class="cov-band" style="left:{pct(o_lo):.2f}%;'
+            f'width:{pct(o_hi) - pct(o_lo):.2f}%"></div>') if has_overlap else ""
+
+    rows = []
+    for _, r in dep.iterrows():
+        name = DEPT_NAMES.get(r["department"], r["department"].upper())
+        left, width = pct(r["lo"]), pct(r["hi"]) - pct(r["lo"])
+        rows.append(
+            f'<div class="cov-row"><div class="cov-name">{html.escape(name)}</div>'
+            f'<div class="cov-track">{band}<div class="cov-bar" '
+            f'style="left:{left:.2f}%;width:{max(width, .8):.2f}%"></div></div>'
+            f'<div class="cov-fig">{money(r["spend"])}<small>{int(r["n"]):,} payments'
+            f'</small></div></div>')
+    axis = (f'<div class="cov-axis"><div></div><div class="ends">'
+            f'<span>{lo:%b %Y}</span><span>{hi:%b %Y}</span></div><div></div></div>')
+    note = ""
+    if has_overlap:
+        note = (f'<p class="cov-note">Each department publishes over a different '
+                f'period. They all overlap from <b>{o_lo:%B %Y} to {o_hi:%B %Y}</b> '
+                f'(shaded), so compare departments within that window. Figures '
+                f'are gross payments, including transfers between public bodies, '
+                f'not departmental budgets.</p>')
+    return f'<div class="cov">{"".join(rows)}{axis}</div>{note}'
 
 
 # --------------------------------------------------------------------------
 # Page
 # --------------------------------------------------------------------------
-st.markdown(
-    '<div class="led-mast"><h1>Spend Ledger</h1>'
-    '<div class="sub">Ask UK central-government spending over £25,000 in plain English. '
-    'Every answer shows the query that produced it.</div></div>',
-    unsafe_allow_html=True,
-)
-
 engine = get_engine()
 if engine is None:
+    st.markdown('<div class="mast"><h1>Spend Ledger</h1></div>',
+                unsafe_allow_html=True)
     st.error(
-        f"No database found at `{DB_PATH}`. Build it first with "
+        f"No database found at `{DB_PATH}`. Build it with "
         "`python load_spend.py --raw ./data/raw --db ./spend.duckdb`, "
         "then reload this page."
     )
@@ -239,86 +484,56 @@ if engine is None:
 con, client, system = engine
 stats = headline_stats()
 
-# Headline readout — the page opens on the real data, not an empty box.
 st.markdown(
     f"""
-    <div class="readout">
-      <div class="cell"><div class="num">{stats['txns']:,}</div>
-        <div class="lab">Transactions</div></div>
-      <div class="cell"><div class="num">£{stats['total']/1e9:.1f}bn</div>
-        <div class="lab">Total value</div></div>
-      <div class="cell"><div class="num">{stats['depts']}</div>
-        <div class="lab">Departments</div></div>
-      <div class="cell"><div class="num">{stats['lo']:%b %Y}–{stats['hi']:%b %Y}</div>
-        <div class="lab">Coverage</div></div>
+    <div class="mast">
+      <h1>Spend Ledger</h1>
+      <p>Ask a question about UK government spending in plain English. Every
+      answer comes with the SQL that produced it, so you can check the working.
+      The ledger holds <strong>{stats['txns']:,} payments over £25,000</strong>,
+      worth <strong>{money(stats['total'])}</strong>, from
+      {stats['lo']:%B %Y} to {stats['hi']:%B %Y}.</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
+st.markdown(coverage_html(stats), unsafe_allow_html=True)
 
-# Sidebar — provenance and the honesty caveat, always visible.
-with st.sidebar:
-    st.markdown('<div class="eyebrow">Provenance</div>', unsafe_allow_html=True)
-    st.markdown('<div class="prov">Source: published departmental spend over '
-                '£25k (Open Government Licence).</div>', unsafe_allow_html=True)
-    for _, r in stats["by_dept"].iterrows():
-        st.markdown(
-            f'<div class="prov" style="margin-top:.5rem">'
-            f'<code>{r["department"]}</code> &nbsp; {int(r["n"]):,} rows · '
-            f'£{r["spend"]/1e9:.1f}bn<br>'
-            f'<span style="color:#7A8891">{r["lo"]:%b %Y} – {r["hi"]:%b %Y}</span>'
-            f'</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="caveat">Figures are <b>gross transactional</b> spend — every '
-        'payment over £25k, including transfers between public bodies — not net '
-        'budgets. Department coverage windows differ; compare like-for-like over '
-        'the overlapping period.</div>', unsafe_allow_html=True)
-
-# Conversation state
 if "history" not in st.session_state:
-    st.session_state.history = []   # list of {role, question, sql, df}
+    st.session_state.history = []   # list of {question, sql, df}
 
-for turn in st.session_state.history:
-    with st.chat_message("user"):
-        st.write(turn["question"])
-    with st.chat_message("assistant"):
-        render_answer(turn["sql"], turn["df"])
-
-# Example prompts as an empty-state invitation
 EXAMPLES = [
     "Top 10 suppliers by total spend",
-    "Monthly spend trend by department in 2025",
     "Which suppliers were paid by more than one department?",
+    "Monthly spend by department in 2025",
     "Biggest single payments over £50 million",
 ]
 pending = None
 if not st.session_state.history:
-    st.markdown('<div class="eyebrow">Try asking</div>', unsafe_allow_html=True)
-    cols = st.columns(2)
+    st.markdown('<div class="examples-head">Try one of these, or ask your own below</div>',
+                unsafe_allow_html=True)
     for i, ex in enumerate(EXAMPLES):
-        if cols[i % 2].button(ex, use_container_width=True, key=f"ex{i}"):
+        if st.button(ex, key=f"ex{i}", use_container_width=True):
             pending = ex
 
-prompt = st.chat_input("Ask about suppliers, departments, categories, time periods…")
+for turn in st.session_state.history:
+    render_answer(turn["question"], turn["sql"], turn["df"])
+
+prompt = st.chat_input("Ask about suppliers, departments or time periods")
 prompt = prompt or pending
 
 if prompt:
-    with st.chat_message("user"):
-        st.write(prompt)
-    with st.chat_message("assistant"):
-        with st.spinner("Composing and running the query…"):
-            try:
-                sql, df = ask(prompt, con, client, system, MODEL)
-            except Exception as err:          # noqa: BLE001
-                st.error(
-                    "Couldn't form a valid query for that one. Try naming a "
-                    "supplier, department, category, or time period — or "
-                    f"rephrasing.\n\n`{err}`"
-                )
-                st.stop()
-        render_answer(sql, df)
-    st.session_state.history.append(
-        {"question": prompt, "sql": sql, "df": df}
-    )
-    if pending:
-        st.rerun()
+    with st.spinner("Writing and running the query…"):
+        try:
+            sql, df = ask(prompt, con, client, system, MODEL)
+        except Exception as err:          # noqa: BLE001
+            st.markdown(f'<div class="q">{html.escape(prompt)}</div>',
+                        unsafe_allow_html=True)
+            st.error(
+                "That question couldn't be turned into a working query. Try "
+                "naming a supplier, department or time period.\n\n"
+                f"Details: `{err}`"
+            )
+            st.stop()
+    st.session_state.history.append({"question": prompt, "sql": sql, "df": df})
+    st.rerun()

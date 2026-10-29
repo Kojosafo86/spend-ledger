@@ -173,10 +173,15 @@ reviewed by hand; most merges were deterministic rules.
 
 ### 4. Transparent UI
 
-Every answer shows the generated SQL as an audit trail, then the results table,
-then an auto-selected chart (time series → multi-line by department, rankings →
-bar). Data provenance and the gross-vs-net caveat are permanently visible in the
-sidebar.
+Answers are drawn as a sheet of accounting analysis paper: ruled rows, money
+columns, and a totals line double-underlined the way a bookkeeper would, added
+only where summing makes sense (spend, not averages or counts). A month ×
+department result is pivoted into one column per department. Each answer is
+followed by an auto-selected chart and the exact SQL that produced it.
+
+The page opens with each department's coverage window drawn as a timeline,
+with the period where all three overlap shaded, so the main caveat for
+cross-department comparison is visible before anyone asks a question.
 
 ---
 
